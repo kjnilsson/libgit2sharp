@@ -10,7 +10,7 @@ namespace LibGit2Sharp.Tests
     {
         private const string remoteName = "testRemote";
 
-        [Theory(Skip = "Skipping due to recent github handling modification of --include-tag.")]
+        [Theory]
         [InlineData("http://github.com/libgit2/TestGitRepository")]
         [InlineData("https://github.com/libgit2/TestGitRepository")]
         [InlineData("git://github.com/libgit2/TestGitRepository.git")]
