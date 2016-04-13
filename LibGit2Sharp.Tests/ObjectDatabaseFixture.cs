@@ -41,7 +41,7 @@ namespace LibGit2Sharp.Tests
                 Assert.Equal("dc53d4c6b8684c21b0b57db29da4a2afea011565", blob.Sha);
 
                 /* The file is unknown from the Index nor the Head ... */
-                Assert.Equal(FileStatus.Untracked, repo.RetrieveStatus("hello.txt"));
+                Assert.Equal(FileStatus.NewInWorkdir, repo.RetrieveStatus("hello.txt"));
 
                 /* ...however, it's indeed stored in the repository. */
                 var fetchedBlob = repo.Lookup<Blob>(blob.Id);
@@ -103,15 +103,13 @@ namespace LibGit2Sharp.Tests
         [InlineData("e9671e138a780833cb689753570fd10a55be84fb", "dummy.guess")]
         public void CanCreateABlobFromAStream(string expectedSha, string hintPath)
         {
-            string path = InitNewRepository();
-
             var sb = new StringBuilder();
             for (int i = 0; i < 6; i++)
             {
                 sb.Append("libgit2\n\r\n");
             }
 
-            using (var repo = new Repository(path))
+            using (var repo = new Repository(InitNewRepository()))
             {
                 CreateAttributesFiles(Path.Combine(repo.Info.Path, "info"), "attributes");
 
@@ -651,6 +649,90 @@ namespace LibGit2Sharp.Tests
 
                 Assert.Equal("dea509d0b3cb", repo.ObjectDatabase.ShortenObjectId(blob1, 12));
                 Assert.Equal("dea509d097ce", repo.ObjectDatabase.ShortenObjectId(blob2, 12));
+            }
+        }
+
+        [Fact]
+        public void TestMergeIntoSelfHasNoConflicts()
+        {
+            string path = SandboxMergeTestRepo();
+            using (var repo = new Repository(path))
+            {
+                var master = repo.Lookup<Commit>("master");
+
+                var result = repo.ObjectDatabase.CanMergeWithoutConflict(master, master);
+
+                Assert.True(result);
+            }
+        }
+
+        [Fact]
+        public void TestMergeIntoOtherUnbornBranchHasNoConflicts()
+        {
+            string path = SandboxMergeTestRepo();
+            using (var repo = new Repository(path))
+            {
+                repo.Refs.UpdateTarget("HEAD", "refs/heads/unborn");
+
+                Touch(repo.Info.WorkingDirectory, "README", "Yeah!\n");
+                repo.Index.Clear();
+                Commands.Stage(repo, "README");
+
+                repo.Commit("A new world, free of the burden of the history", Constants.Signature, Constants.Signature);
+
+                var master = repo.Branches["master"].Tip;
+                var branch = repo.Branches["unborn"].Tip;
+
+                Assert.True(repo.ObjectDatabase.CanMergeWithoutConflict(master, branch));
+            }
+        }
+
+        [Fact]
+        public void TestMergeIntoOtherUnbornBranchHasConflicts()
+        {
+            string path = SandboxMergeTestRepo();
+            using (var repo = new Repository(path))
+            {
+                repo.Refs.UpdateTarget("HEAD", "refs/heads/unborn");
+
+                repo.Index.Replace(repo.Lookup<Commit>("conflicts"));
+
+                repo.Commit("A conflicting world, free of the burden of the history", Constants.Signature, Constants.Signature);
+
+                var master = repo.Branches["master"].Tip;
+                var branch = repo.Branches["unborn"].Tip;
+
+                Assert.False(repo.ObjectDatabase.CanMergeWithoutConflict(master, branch));
+            }
+        }
+
+        [Fact]
+        public void TestMergeIntoOtherBranchHasNoConflicts()
+        {
+            string path = SandboxMergeTestRepo();
+            using (var repo = new Repository(path))
+            {
+                var master = repo.Lookup<Commit>("master");
+                var branch = repo.Lookup<Commit>("fast_forward");
+
+                var result = repo.ObjectDatabase.CanMergeWithoutConflict(master, branch);
+
+                Assert.True(result);
+            }
+        }
+
+        [Fact]
+        public void TestMergeIntoWrongBranchHasConflicts()
+        {
+            string path = SandboxMergeTestRepo();
+            using (var repo = new Repository(path))
+            {
+                var master = repo.Lookup<Commit>("master");
+                var branch = repo.Lookup<Commit>("conflicts");
+
+                var result = repo.ObjectDatabase.CanMergeWithoutConflict(master, branch);
+
+                Assert.False(result);
             }
         }
 

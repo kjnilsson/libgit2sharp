@@ -3,8 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Linq;
+using System.Runtime.InteropServices;
 using LibGit2Sharp.Core;
 using LibGit2Sharp.Core.Handles;
 
@@ -17,7 +16,7 @@ namespace LibGit2Sharp
     [DebuggerDisplay("{DebuggerDisplay,nq}")]
     public class Index : IEnumerable<IndexEntry>
     {
-        private readonly IndexSafeHandle handle;
+        private readonly IndexHandle handle;
         private readonly Repository repo;
         private readonly ConflictCollection conflicts;
 
@@ -32,7 +31,7 @@ namespace LibGit2Sharp
             this.repo = repo;
 
             handle = Proxy.git_repository_index(repo.Handle);
-            conflicts = new ConflictCollection(repo);
+            conflicts = new ConflictCollection(this);
 
             repo.RegisterForCleanup(handle);
         }
@@ -43,18 +42,18 @@ namespace LibGit2Sharp
 
             handle = Proxy.git_index_open(indexPath);
             Proxy.git_repository_set_index(repo.Handle, handle);
-            conflicts = new ConflictCollection(repo);
+            conflicts = new ConflictCollection(this);
 
             repo.RegisterForCleanup(handle);
         }
 
-        internal IndexSafeHandle Handle
+        internal IndexHandle Handle
         {
             get { return handle; }
         }
 
         /// <summary>
-        /// Gets the number of <see cref="IndexEntry"/> in the index.
+        /// Gets the number of <see cref="IndexEntry"/> in the <see cref="Index"/>.
         /// </summary>
         public virtual int Count
         {
@@ -62,7 +61,7 @@ namespace LibGit2Sharp
         }
 
         /// <summary>
-        /// Determines if the index is free from conflicts.
+        /// Determines if the <see cref="Index"/> is free from conflicts.
         /// </summary>
         public virtual bool IsFullyMerged
         {
@@ -72,22 +71,22 @@ namespace LibGit2Sharp
         /// <summary>
         /// Gets the <see cref="IndexEntry"/> with the specified relative path.
         /// </summary>
-        public virtual IndexEntry this[string path]
+        public virtual unsafe IndexEntry this[string path]
         {
             get
             {
                 Ensure.ArgumentNotNullOrEmptyString(path, "path");
 
-                IndexEntrySafeHandle entryHandle = Proxy.git_index_get_bypath(handle, path, 0);
-                return IndexEntry.BuildFromPtr(entryHandle);
+                git_index_entry* entry = Proxy.git_index_get_bypath(handle, path, 0);
+                return IndexEntry.BuildFromPtr(entry);
             }
         }
 
-        private IndexEntry this[int index]
+        private unsafe IndexEntry this[int index]
         {
             get
             {
-                IndexEntrySafeHandle entryHandle = Proxy.git_index_get_byindex(handle, (UIntPtr)index);
+                git_index_entry* entryHandle = Proxy.git_index_get_byindex(handle, (UIntPtr)index);
                 return IndexEntry.BuildFromPtr(entryHandle);
             }
         }
@@ -128,9 +127,9 @@ namespace LibGit2Sharp
         #endregion
 
         /// <summary>
-        /// Replaces entries in the staging area with entries from the specified tree.
+        /// Replaces entries in the <see cref="Index"/> with entries from the specified <see cref="Tree"/>.
         /// <para>
-        ///   This overwrites all existing state in the staging area.
+        ///   This overwrites all existing state in the <see cref="Index"/>.
         /// </para>
         /// </summary>
         /// <param name="source">The <see cref="Tree"/> to read the entries from.</param>
@@ -140,21 +139,18 @@ namespace LibGit2Sharp
             {
                 Proxy.git_index_read_fromtree(this, obj.ObjectPtr);
             }
-
-            UpdatePhysicalIndex();
         }
 
         /// <summary>
-        /// Clears all entries the index. This is semantically equivalent to
-        /// creating an empty tree object and resetting the index to that tree.
+        /// Clears all entries the <see cref="Index"/>. This is semantically equivalent to
+        /// creating an empty <see cref="Tree"/> object and resetting the <see cref="Index"/> to that <see cref="Tree"/>.
         /// <para>
-        ///   This overwrites all existing state in the staging area.
+        ///   This overwrites all existing state in the <see cref="Index"/>.
         /// </para>
         /// </summary>
         public virtual void Clear()
         {
             Proxy.git_index_clear(this);
-            UpdatePhysicalIndex();
         }
 
         private void RemoveFromIndex(string relativePath)
@@ -163,23 +159,17 @@ namespace LibGit2Sharp
         }
 
         /// <summary>
-        /// Removes a specified entry from the index.
+        /// Removes a specified entry from the <see cref="Index"/>.
         /// </summary>
         /// <param name="indexEntryPath">The path of the <see cref="Index"/> entry to be removed.</param>
         public virtual void Remove(string indexEntryPath)
         {
-            if (indexEntryPath == null)
-            {
-                throw new ArgumentNullException("indexEntryPath");
-            }
-
+            Ensure.ArgumentNotNull(indexEntryPath, "indexEntryPath");
             RemoveFromIndex(indexEntryPath);
-
-            UpdatePhysicalIndex();
         }
 
         /// <summary>
-        /// Adds a file from the workdir in the <see cref="Index"/>.
+        /// Adds a file from the working directory in the <see cref="Index"/>.
         /// <para>
         ///   If an entry with the same path already exists in the <see cref="Index"/>,
         ///   the newly added one will overwrite it.
@@ -188,14 +178,8 @@ namespace LibGit2Sharp
         /// <param name="pathInTheWorkdir">The path, in the working directory, of the file to be added.</param>
         public virtual void Add(string pathInTheWorkdir)
         {
-            if (pathInTheWorkdir == null)
-            {
-                throw new ArgumentNullException("pathInTheWorkdir");
-            }
-
+            Ensure.ArgumentNotNull(pathInTheWorkdir, "pathInTheWorkdir");
             Proxy.git_index_add_bypath(handle, pathInTheWorkdir);
-
-            UpdatePhysicalIndex();
         }
 
         /// <summary>
@@ -212,25 +196,9 @@ namespace LibGit2Sharp
         public virtual void Add(Blob blob, string indexEntryPath, Mode indexEntryMode)
         {
             Ensure.ArgumentConformsTo(indexEntryMode, m => m.HasAny(TreeEntryDefinition.BlobModes), "indexEntryMode");
-
-            if (blob == null)
-            {
-                throw new ArgumentNullException("blob");
-            }
-
-            if (indexEntryPath == null)
-            {
-                throw new ArgumentNullException("indexEntryPath");
-            }
-
+            Ensure.ArgumentNotNull(blob, "blob");
+            Ensure.ArgumentNotNull(indexEntryPath, "indexEntryPath");
             AddEntryToTheIndex(indexEntryPath, blob.Id, indexEntryMode);
-
-            UpdatePhysicalIndex();
-        }
-
-        private void UpdatePhysicalIndex()
-        {
-            Proxy.git_index_write(handle);
         }
 
         internal void Replace(TreeChanges changes)
@@ -247,21 +215,19 @@ namespace LibGit2Sharp
                         continue;
 
                     case ChangeKind.Deleted:
-                        /* Fall through */
                     case ChangeKind.Modified:
-                        AddEntryToTheIndex(
-                            treeEntryChanges.OldPath,
-                            treeEntryChanges.OldOid,
-                            treeEntryChanges.OldMode);
-
+                        AddEntryToTheIndex(treeEntryChanges.OldPath,
+                                           treeEntryChanges.OldOid,
+                                           treeEntryChanges.OldMode);
                         continue;
 
                     default:
-                        throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture, "Entry '{0}' bears an unexpected ChangeKind '{1}'", treeEntryChanges.Path, treeEntryChanges.Status));
+                        throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture,
+                                                                          "Entry '{0}' bears an unexpected ChangeKind '{1}'",
+                                                                          treeEntryChanges.Path,
+                                                                          treeEntryChanges.Status));
                 }
             }
-
-            UpdatePhysicalIndex();
         }
 
         /// <summary>
@@ -269,32 +235,75 @@ namespace LibGit2Sharp
         /// </summary>
         public virtual ConflictCollection Conflicts
         {
-            get
-            {
-                return conflicts;
-            }
+            get { return conflicts; }
         }
 
-        private void AddEntryToTheIndex(string path, ObjectId id, Mode mode)
+        private unsafe void AddEntryToTheIndex(string path, ObjectId id, Mode mode)
         {
-            var indexEntry = new GitIndexEntry
+            IntPtr pathPtr = StrictFilePathMarshaler.FromManaged(path);
+            var indexEntry = new git_index_entry
             {
-                Mode = (uint)mode,
-                Id = id.Oid,
-                Path = StrictFilePathMarshaler.FromManaged(path),
+                mode = (uint)mode,
+                path = (char*) pathPtr,
             };
+            Marshal.Copy(id.RawId, 0, new IntPtr(indexEntry.id.Id), GitOid.Size);
 
-            Proxy.git_index_add(handle, indexEntry);
-            EncodingMarshaler.Cleanup(indexEntry.Path);
+            Proxy.git_index_add(handle, &indexEntry);
+            EncodingMarshaler.Cleanup(pathPtr);
         }
 
         private string DebuggerDisplay
         {
             get
             {
-                return string.Format(CultureInfo.InvariantCulture,
-                    "Count = {0}", Count);
+                return string.Format(CultureInfo.InvariantCulture, "Count = {0}", Count);
             }
+        }
+
+        /// <summary>
+        /// Replaces entries in the <see cref="Index"/> with entries from the specified <see cref="Commit"/>.
+        /// </summary>
+        /// <param name="commit">The target <see cref="Commit"/> object.</param>
+        public virtual void Replace(Commit commit)
+        {
+            Replace(commit, null, null);
+        }
+
+        /// <summary>
+        /// Replaces entries in the <see cref="Index"/> with entries from the specified <see cref="Commit"/>.
+        /// </summary>
+        /// <param name="commit">The target <see cref="Commit"/> object.</param>
+        /// <param name="paths">The list of paths (either files or directories) that should be considered.</param>
+        public virtual void Replace(Commit commit, IEnumerable<string> paths)
+        {
+            Replace(commit, paths, null);
+        }
+
+        /// <summary>
+        /// Replaces entries in the <see cref="Index"/> with entries from the specified <see cref="Commit"/>.
+        /// </summary>
+        /// <param name="commit">The target <see cref="Commit"/> object.</param>
+        /// <param name="paths">The list of paths (either files or directories) that should be considered.</param>
+        /// <param name="explicitPathsOptions">
+        /// If set, the passed <paramref name="paths"/> will be treated as explicit paths.
+        /// Use these options to determine how unmatched explicit paths should be handled.
+        /// </param>
+        public virtual void Replace(Commit commit, IEnumerable<string> paths, ExplicitPathsOptions explicitPathsOptions)
+        {
+            Ensure.ArgumentNotNull(commit, "commit");
+
+            using (var changes = repo.Diff.Compare<TreeChanges>(commit.Tree, DiffTargets.Index, paths, explicitPathsOptions, new CompareOptions { Similarity = SimilarityOptions.None }))
+            {
+                Replace(changes);
+            }
+        }
+
+        /// <summary>
+        /// Write the contents of this <see cref="Index"/> to disk
+        /// </summary>
+        public virtual void Write()
+        {
+            Proxy.git_index_write(handle);
         }
     }
 }

@@ -91,28 +91,35 @@ namespace LibGit2Sharp.Tests
                     r => r.Url = newUrl);
 
                 Assert.Equal(newUrl, updatedremote.Url);
+                // with no push url set, PushUrl defaults to the fetch url
+                Assert.Equal(newUrl, updatedremote.PushUrl);
             }
         }
 
         [Fact]
-        public void CanCheckEqualityOfRemote()
+        public void CanSetRemotePushUrl()
         {
-            string path = SandboxStandardTestRepo();
+            string path = SandboxBareTestRepo();
             using (var repo = new Repository(path))
             {
-                Remote oneOrigin = repo.Network.Remotes["origin"];
-                Assert.NotNull(oneOrigin);
+                const string name = "upstream";
+                const string url = "https://github.com/libgit2/libgit2sharp.git";
+                const string pushurl = "https://github.com/libgit2/libgit2.git";
 
-                Remote otherOrigin = repo.Network.Remotes["origin"];
-                Assert.Equal(oneOrigin, otherOrigin);
+                repo.Network.Remotes.Add(name, url);
+                Remote remote = repo.Network.Remotes[name];
+                Assert.NotNull(remote);
 
-                Remote createdRemote = repo.Network.Remotes.Add("origin2", oneOrigin.Url);
+                // before setting push, both push and fetch urls should match
+                Assert.Equal(url, remote.Url);
+                Assert.Equal(url, remote.PushUrl);
 
-                Remote loadedRemote = repo.Network.Remotes["origin2"];
-                Assert.NotNull(loadedRemote);
-                Assert.Equal(createdRemote, loadedRemote);
+                Remote updatedremote = repo.Network.Remotes.Update(remote,
+                    r => r.PushUrl = pushurl);
 
-                Assert.NotEqual(oneOrigin, loadedRemote);
+                // url should not change, push url should be set to new value
+                Assert.Equal(url, updatedremote.Url);
+                Assert.Equal(pushurl, updatedremote.PushUrl);
             }
         }
 
@@ -333,6 +340,43 @@ namespace LibGit2Sharp.Tests
 
                 Assert.Throws<NameConflictException>(() => repo.Network.Remotes.Rename("origin", "upstream"));
             }
+        }
+
+        [Theory]
+        [InlineData(null, null, false)]
+        [InlineData(null, false, false)]
+        [InlineData(null, true, true)]
+        [InlineData(false, null, false)]
+        [InlineData(false, false, false)]
+        [InlineData(false, true, true)]
+        [InlineData(true, null, true)]
+        [InlineData(true, false, false)]
+        [InlineData(true, true, true)]
+        public void ShoudlPruneOnFetchReflectsTheConfiguredSetting(bool? fetchPrune, bool? remotePrune, bool expectedFetchPrune)
+        {
+            var path = SandboxStandardTestRepo();
+
+            using (var repo = new Repository(path))
+            {
+                Assert.Null(repo.Config.Get<bool>("fetch.prune"));
+                Assert.Null(repo.Config.Get<bool>("remote.origin.prune"));
+
+                SetIfNotNull(repo, "fetch.prune", fetchPrune);
+                SetIfNotNull(repo, "remote.origin.prune", remotePrune);
+
+                var remote = repo.Network.Remotes["origin"];
+                Assert.Equal(expectedFetchPrune, remote.AutomaticallyPruneOnFetch);
+            }
+        }
+
+        private void SetIfNotNull(IRepository repo, string configName, bool? value)
+        {
+            if (!value.HasValue)
+            {
+                return;
+            }
+
+            repo.Config.Set(configName, value.Value);
         }
     }
 }

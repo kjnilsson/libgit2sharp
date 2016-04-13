@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using LibGit2Sharp.Tests.TestHelpers;
 using Xunit;
@@ -20,7 +22,7 @@ namespace LibGit2Sharp.Tests
 
             using (var repo = new Repository(path))
             {
-                Remote remote = repo.Network.Remotes.Add(remoteName, url);
+                repo.Network.Remotes.Add(remoteName, url);
 
                 // Set up structures for the expected results
                 // and verifying the RemoteUpdateTips callback.
@@ -42,7 +44,7 @@ namespace LibGit2Sharp.Tests
                 }
 
                 // Perform the actual fetch
-                repo.Network.Fetch(remote, new FetchOptions { OnUpdateTips = expectedFetchState.RemoteUpdateTipsHandler });
+                Commands.Fetch(repo, remoteName, new string[0], new FetchOptions { OnUpdateTips = expectedFetchState.RemoteUpdateTipsHandler }, null);
 
                 // Verify the expected
                 expectedFetchState.CheckUpdatedReferences(repo);
@@ -59,13 +61,13 @@ namespace LibGit2Sharp.Tests
 
             using (var repo = new Repository(path))
             {
-                Remote remote = repo.Network.Remotes.Add(remoteName, Constants.PrivateRepoUrl);
+                repo.Network.Remotes.Add(remoteName, Constants.PrivateRepoUrl);
 
                 // Perform the actual fetch
-                repo.Network.Fetch(remote, new FetchOptions
+                Commands.Fetch(repo, remoteName, new string[0], new FetchOptions
                 {
                     CredentialsProvider = Constants.PrivateRepoCredentials
-                });
+                }, null);
             }
         }
 
@@ -79,7 +81,7 @@ namespace LibGit2Sharp.Tests
 
             using (var repo = new Repository(path))
             {
-                Remote remote = repo.Network.Remotes.Add(remoteName, url);
+                repo.Network.Remotes.Add(remoteName, url);
 
                 // Set up structures for the expected results
                 // and verifying the RemoteUpdateTips callback.
@@ -99,10 +101,10 @@ namespace LibGit2Sharp.Tests
                 }
 
                 // Perform the actual fetch
-                repo.Network.Fetch(remote, new FetchOptions {
+                Commands.Fetch(repo, remoteName, new string[0], new FetchOptions {
                     TagFetchMode = TagFetchMode.All,
                     OnUpdateTips = expectedFetchState.RemoteUpdateTipsHandler
-                });
+                }, null);
 
                 // Verify the expected
                 expectedFetchState.CheckUpdatedReferences(repo);
@@ -122,7 +124,7 @@ namespace LibGit2Sharp.Tests
 
             using (var repo = new Repository(path))
             {
-                Remote remote = repo.Network.Remotes.Add(remoteName, url);
+                repo.Network.Remotes.Add(remoteName, url);
 
                 string refSpec = string.Format("refs/heads/{2}:refs/remotes/{0}/{1}", remoteName, localBranchName, remoteBranchName);
 
@@ -132,11 +134,23 @@ namespace LibGit2Sharp.Tests
                 var expectedFetchState = new ExpectedFetchState(remoteName);
                 expectedFetchState.AddExpectedBranch(localBranchName, ObjectId.Zero, remoteInfo.BranchTips[remoteBranchName]);
 
+                // Let's account for opportunistic updates during the Fetch() call
+                if (!string.Equals("master", localBranchName, StringComparison.OrdinalIgnoreCase))
+                {
+                    expectedFetchState.AddExpectedBranch("master", ObjectId.Zero, remoteInfo.BranchTips["master"]);
+                }
+
+                if (string.Equals("master", localBranchName, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals("master", remoteBranchName, StringComparison.OrdinalIgnoreCase))
+                {
+                    expectedFetchState.AddExpectedBranch(remoteBranchName, ObjectId.Zero, remoteInfo.BranchTips[remoteBranchName]);
+                }
+
                 // Perform the actual fetch
-                repo.Network.Fetch(remote, new string[] { refSpec }, new FetchOptions {
+                Commands.Fetch(repo, remoteName, new string[] { refSpec }, new FetchOptions {
                     TagFetchMode = TagFetchMode.None,
                     OnUpdateTips = expectedFetchState.RemoteUpdateTipsHandler
-                });
+                }, null);
 
                 // Verify the expected
                 expectedFetchState.CheckUpdatedReferences(repo);
@@ -167,7 +181,7 @@ namespace LibGit2Sharp.Tests
                     r => r.TagFetchMode = tagFetchMode);
 
                 // Perform the actual fetch.
-                repo.Network.Fetch(remote);
+                Commands.Fetch(repo, remoteName, new string[0], null, null);
 
                 // Verify the number of fetched tags.
                 Assert.Equal(expectedTagCount, repo.Tags.Count());
@@ -185,7 +199,44 @@ namespace LibGit2Sharp.Tests
 
             using (var repo = new Repository(clonedRepoPath))
             {
-                repo.Fetch("origin", new FetchOptions { TagFetchMode = TagFetchMode.All });
+                Commands.Fetch(repo, "origin", new string[0], new FetchOptions { TagFetchMode = TagFetchMode.All }, null);
+            }
+        }
+
+        [Fact]
+        public void FetchHonorsTheFetchPruneConfigurationEntry()
+        {
+            var source = SandboxBareTestRepo();
+            var url = new Uri(Path.GetFullPath(source)).AbsoluteUri;
+
+            var scd = BuildSelfCleaningDirectory();
+
+            string clonedRepoPath = Repository.Clone(url, scd.DirectoryPath);
+
+            using (var clonedRepo = new Repository(clonedRepoPath))
+            {
+                Assert.Equal(5, clonedRepo.Branches.Count(b => b.IsRemote));
+
+                // Drop one of the branches in the remote repository
+                using (var sourceRepo = new Repository(source))
+                {
+                    sourceRepo.Branches.Remove("packed-test");
+                }
+
+                // No pruning when the configuration entry isn't defined
+                Assert.Null(clonedRepo.Config.Get<bool>("fetch.prune"));
+                Commands.Fetch(clonedRepo, "origin", new string[0], null, null);
+                Assert.Equal(5, clonedRepo.Branches.Count(b => b.IsRemote));
+
+                // No pruning when the configuration entry is set to false
+                clonedRepo.Config.Set<bool>("fetch.prune", false);
+                Commands.Fetch(clonedRepo, "origin", new string[0], null, null);
+                Assert.Equal(5, clonedRepo.Branches.Count(b => b.IsRemote));
+
+                // Auto pruning when the configuration entry is set to true
+                clonedRepo.Config.Set<bool>("fetch.prune", true);
+                Commands.Fetch(clonedRepo, "origin", new string[0], null, null);
+                Assert.Equal(4, clonedRepo.Branches.Count(b => b.IsRemote));
             }
         }
     }
